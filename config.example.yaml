@@ -1,0 +1,14 @@
+# Copy this file to /etc/port-forwarder/config.yaml and replace the
+# documentation-only addresses and ports with production values.
+mappings:
+  - name: example_wireguard_udp
+    source_port: 41000
+    destination_ip: 192.0.2.10
+    destination_port: 42000
+    protocol: udp
+
+  - name: example_service_tcp
+    source_port: 43000
+    destination_ip: 198.51.100.20
+    destination_port: 44000
+    protocol: tcp

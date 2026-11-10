@@ -1,0 +1,14 @@
+[Unit]
+Description=YAML-driven TCP/UDP port forwarding
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/port-forwarder apply
+ExecReload=/usr/local/sbin/port-forwarder reload
+ExecStop=/usr/local/sbin/port-forwarder stop
+
+[Install]
+WantedBy=multi-user.target
