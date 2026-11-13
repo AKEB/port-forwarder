@@ -2,9 +2,9 @@
 # documentation-only addresses and ports with production values.
 mappings:
   - name: example_wireguard_udp
-    source_port: 41000
+    source_port: "41000-41009"
     destination_ip: 192.0.2.10
-    destination_port: 42000
+    destination_port: "42000-42009"
     protocol: udp
 
   - name: example_service_tcp

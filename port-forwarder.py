@@ -92,6 +92,23 @@ def load_simple_yaml(path):
     return root
 
 
+def parse_port_range(value, label, index):
+    text = str(value).strip()
+    match = re.fullmatch(r"([0-9]+)(?:\s*[-:]\s*([0-9]+))?", text)
+    if not match:
+        raise ConfigError(
+            f"mapping #{index}: {label} must be a port or range like 60020-60029"
+        )
+
+    start = int(match.group(1))
+    end = int(match.group(2) or start)
+    if start < 1 or end > 65535:
+        raise ConfigError(f"mapping #{index}: {label} must be from 1 to 65535")
+    if start > end:
+        raise ConfigError(f"mapping #{index}: {label} range start must not exceed its end")
+    return start, end
+
+
 def normalize_mapping(item, index):
     aliases = {
         "source_port": "listen_port",
@@ -116,29 +133,45 @@ def normalize_mapping(item, index):
     if proto not in ("tcp", "udp"):
         raise ConfigError(f"mapping #{index}: protocol must be tcp or udp")
 
-    try:
-        listen_port = int(normalized["listen_port"])
-        target_port = int(normalized["target_port"])
-    except ValueError as exc:
-        raise ConfigError(f"mapping #{index}: ports must be integers") from exc
-
-    for label, port in (("listen_port", listen_port), ("target_port", target_port)):
-        if port < 1 or port > 65535:
-            raise ConfigError(f"mapping #{index}: {label} must be from 1 to 65535")
+    listen_start, listen_end = parse_port_range(
+        normalized["listen_port"], "listen_port", index
+    )
+    target_start, target_end = parse_port_range(
+        normalized["target_port"], "target_port", index
+    )
+    listen_count = listen_end - listen_start + 1
+    target_count = target_end - target_start + 1
+    if listen_count != target_count:
+        raise ConfigError(
+            f"mapping #{index}: source and destination ranges must contain the same number of ports"
+        )
 
     try:
         target_ip = str(ipaddress.ip_address(str(normalized["target_ip"])))
     except ValueError as exc:
         raise ConfigError(f"mapping #{index}: target_ip is not a valid IP address") from exc
 
-    name = str(normalized.get("name", f"{proto}_{listen_port}_to_{target_ip}_{target_port}"))
-    return {
-        "name": name,
-        "protocol": proto,
-        "listen_port": listen_port,
-        "target_ip": target_ip,
-        "target_port": target_port,
-    }
+    base_name = str(
+        normalized.get(
+            "name",
+            f"{proto}_{listen_start}-{listen_end}_to_{target_ip}_{target_start}-{target_end}",
+        )
+    )
+    mappings = []
+    for offset in range(listen_count):
+        listen_port = listen_start + offset
+        target_port = target_start + offset
+        name = base_name if listen_count == 1 else f"{base_name}_{listen_port}"
+        mappings.append(
+            {
+                "name": name,
+                "protocol": proto,
+                "listen_port": listen_port,
+                "target_ip": target_ip,
+                "target_port": target_port,
+            }
+        )
+    return mappings
 
 
 def load_config(path):
@@ -146,7 +179,10 @@ def load_config(path):
     mappings = config.get("mappings")
     if not isinstance(mappings, list) or not mappings:
         raise ConfigError("config must contain a non-empty 'mappings:' list")
-    return [normalize_mapping(item, idx) for idx, item in enumerate(mappings, 1)]
+    normalized = []
+    for idx, item in enumerate(mappings, 1):
+        normalized.extend(normalize_mapping(item, idx))
+    return normalized
 
 
 def ensure_chain(table, chain):
@@ -244,13 +280,18 @@ def status():
     print(run(["sysctl", "net.ipv4.ip_forward"]).stdout.strip())
 
 
+def check_config(config_path):
+    mappings = load_config(config_path)
+    print(f"configuration is valid: {len(mappings)} forwarding mapping(s)")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Apply YAML-driven TCP/UDP port forwarding rules.")
-    parser.add_argument("command", choices=["apply", "reload", "start", "stop", "status"])
+    parser.add_argument("command", choices=["apply", "reload", "start", "stop", "status", "check"])
     parser.add_argument("-c", "--config", type=Path, default=CONFIG_PATH)
     args = parser.parse_args()
 
-    if os.geteuid() != 0:
+    if args.command != "check" and os.geteuid() != 0:
         print("must run as root", file=sys.stderr)
         return 1
 
@@ -261,6 +302,8 @@ def main():
             stop_rules()
         elif args.command == "status":
             status()
+        elif args.command == "check":
+            check_config(args.config)
     except (ConfigError, subprocess.CalledProcessError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         if isinstance(exc, subprocess.CalledProcessError):
